@@ -108,13 +108,13 @@ const getMonthLabel = (ym) => {
 const generateAssignment = (raterName) => {
   const rater = TEAM.find(p => p.name === raterName);
   if (!rater) return [];
-  const MAX = 4;
+  const TOTAL = 4;
+  // Prioritize same-room first, cap at TOTAL-1 so there's always at least 1 from outside
   const sameRoom = TEAM.filter(p => p.name !== raterName && p.room === rater.room);
-  // Cap same-room at MAX
-  const sameRoomCapped = sameRoom.slice(0, MAX);
-  const remaining = MAX - sameRoomCapped.length;
+  const sameRoomPick = sameRoom.slice(0, TOTAL - 1);
+  const remaining = TOTAL - sameRoomPick.length;
   const otherRoom = TEAM.filter(p => p.room !== rater.room).sort(() => Math.random() - 0.5);
-  return [...sameRoomCapped, ...otherRoom.slice(0, Math.max(2, remaining))];
+  return [...sameRoomPick, ...otherRoom.slice(0, remaining)];
 };
 
 export default function App() {
@@ -439,7 +439,7 @@ export default function App() {
                 </div>
                 {PERSONAL_PARAMS.map((p, i) => <ScoreRow key={i} label={p} index={i} scores={currentPersonalScores} setScore={setCurrentPersonalScore} />)}
                 <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-                  <GhostBtn onClick={() => currentRateeIdx > 0 ? setCurrentRateeIdx(currentRateeIdx - 1) : setStep(0)}>← Back</GhostBtn>
+                  <button onClick={() => currentRateeIdx > 0 ? setCurrentRateeIdx(currentRateeIdx - 1) : setStep(0)} style={{ padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>← Back</button>
                   <PrimaryBtn disabled={!canNextPersonal} onClick={() => currentRateeIdx < assignment.length - 1 ? setCurrentRateeIdx(currentRateeIdx + 1) : setStep(2)}>
                     {currentRateeIdx < assignment.length - 1 ? "Orang berikutnya →" : "Lanjut ke Divisi →"}
                   </PrimaryBtn>
@@ -459,7 +459,7 @@ export default function App() {
                 </div>
                 {DIVISION_PARAMS.map((p, i) => <ScoreRow key={i} label={p} index={i} scores={currentDivScores} setScore={setCurrentDivScore} />)}
                 <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-                  <GhostBtn onClick={() => currentDivIdx > 0 ? setCurrentDivIdx(currentDivIdx - 1) : setStep(1)}>← Back</GhostBtn>
+                  <button onClick={() => currentDivIdx > 0 ? setCurrentDivIdx(currentDivIdx - 1) : setStep(1)} style={{ padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>← Back</button>
                   <PrimaryBtn disabled={!canNextDiv || loading} onClick={() => currentDivIdx < divisionList.length - 1 ? setCurrentDivIdx(currentDivIdx + 1) : submitAll()}>
                     {loading ? "Menyimpan... 🌸" : currentDivIdx < divisionList.length - 1 ? "Divisi berikutnya →" : "Kirim Semua ✓"}
                   </PrimaryBtn>
