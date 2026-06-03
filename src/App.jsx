@@ -72,25 +72,13 @@ const DIVISION_PARAMS = [
 const SCORE_LABELS = { 1: "Belum terlihat", 2: "Mulai terlihat", 3: "Terlihat tapi labil", 4: "Terlihat dan stabil", 5: "Teladan" };
 const SCORE_COLORS = { 1: "#f87171", 2: "#fb923c", 3: "#fbbf24", 4: "#34d399", 5: "#818cf8" };
 
-// Pastel theme
 const T = {
-  bg: "#fdf6ff",
-  bgCard: "#ffffff",
-  bgCardAlt: "#faf5ff",
-  border: "#e9d5ff",
-  borderLight: "#f3e8ff",
-  text: "#4a3b5c",
-  textSub: "#9c7bb5",
-  textMuted: "#c4a8d9",
-  pink: "#f9a8d4",
-  lavender: "#c4b5fd",
-  mint: "#6ee7b7",
-  purple: "#a78bfa",
-  purpleDark: "#7c3aed",
-  purpleLight: "#ede9fe",
+  bg: "#fdf6ff", bgCard: "#ffffff", bgCardAlt: "#faf5ff",
+  border: "#e9d5ff", borderLight: "#f3e8ff",
+  text: "#4a3b5c", textSub: "#9c7bb5", textMuted: "#c4a8d9",
+  purple: "#a78bfa", purpleDark: "#7c3aed", purpleLight: "#ede9fe",
   grad: "linear-gradient(135deg, #f9a8d4, #c4b5fd, #93c5fd)",
   gradBtn: "linear-gradient(135deg, #c084fc, #818cf8)",
-  gradBtnHover: "linear-gradient(135deg, #a855f7, #6366f1)",
 };
 
 const getCurrentMonth = () => {
@@ -104,25 +92,42 @@ const getMonthLabel = (ym) => {
   return `${months[parseInt(m) - 1]} ${y}`;
 };
 
-// FAIR assignment: all same-room (max 4) + fill up to 4 total from other rooms
-const generateAssignment = (raterName) => {
-  const rater = TEAM.find(p => p.name === raterName);
-  if (!rater) return [];
-  const TOTAL = 4;
-  // Prioritize same-room first, cap at TOTAL-1 so there's always at least 1 from outside
-  const sameRoom = TEAM.filter(p => p.name !== raterName && p.room === rater.room);
-  const sameRoomPick = sameRoom.slice(0, TOTAL - 1);
-  const remaining = TOTAL - sameRoomPick.length;
-  const otherRoom = TEAM.filter(p => p.room !== rater.room).sort(() => Math.random() - 0.5);
-  return [...sameRoomPick, ...otherRoom.slice(0, remaining)];
-};
+// Seeded random — deterministik berdasarkan seed angka
+function seededRandom(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+// Generate assignment bulanan — konsisten selama sebulan, beda bulan berikutnya
+// Semua dapat tepat 4 penilaian masuk & keluar
+function getMonthlyAssignments(yearMonth) {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const seed = y * 100 + m + 42; // +42 biar Juni 2026 gak terlalu "obvious"
+  const rng = seededRandom(seed);
+
+  // Shuffle team dengan seed bulan ini
+  const shuffled = [...TEAM].sort(() => rng() - 0.5);
+  const n = shuffled.length;
+
+  // Circle assignment: nilai 4 orang berikutnya
+  const assignments = {};
+  shuffled.forEach((person, i) => {
+    assignments[person.name] = [];
+    for (let j = 1; j <= 4; j++) {
+      assignments[person.name].push(shuffled[(i + j) % n].name);
+    }
+  });
+  return assignments;
+}
 
 export default function App() {
   const [view, setView] = useState("home");
   const [step, setStep] = useState(0);
   const [raterName, setRaterName] = useState("");
   const [assignment, setAssignment] = useState([]);
-  const [previewAssignment, setPreviewAssignment] = useState([]);
   const [currentRateeIdx, setCurrentRateeIdx] = useState(0);
   const [currentDivIdx, setCurrentDivIdx] = useState(0);
   const [allPersonalScores, setAllPersonalScores] = useState({});
@@ -132,14 +137,28 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState({ persons: [], divisions: [] });
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [allMonths, setAllMonths] = useState([getCurrentMonth()]);
+  const [alreadySubmitted, setAlreadySubmitted] = useState(false);
 
+  const currentMonth = getCurrentMonth();
   const raterInfo = TEAM.find(p => p.name === raterName);
   const divisionList = raterInfo ? DIVISIONS.filter(d => d !== raterInfo.division) : DIVISIONS;
   const currentRatee = assignment[currentRateeIdx];
   const currentDiv = divisionList[currentDivIdx];
 
+  // Preview assignment (sebelum mulai)
+  const previewAssignment = raterName
+    ? (getMonthlyAssignments(currentMonth)[raterName] || []).map(n => TEAM.find(p => p.name === n)).filter(Boolean)
+    : [];
+
   useEffect(() => { if (view === "leaderboard") fetchLeaderboard(); }, [view, selectedMonth]);
-  useEffect(() => { if (raterName) setPreviewAssignment(generateAssignment(raterName)); }, [raterName]);
+
+  // Cek apakah sudah submit bulan ini
+  useEffect(() => {
+    if (raterName) {
+      supabase.from("submissions").select("id").eq("month", currentMonth).eq("rater", raterName).limit(1)
+        .then(({ data }) => setAlreadySubmitted(data && data.length > 0));
+    }
+  }, [raterName]);
 
   const fetchLeaderboard = async () => {
     setLoading(true);
@@ -148,7 +167,6 @@ export default function App() {
       const { data: divs } = await supabase.from("division_scores").select("*").eq("month", selectedMonth);
       const { data: allSubs } = await supabase.from("submissions").select("month");
 
-      // Normalized person avg (weighted mean regardless of how many rated them)
       const personMap = {};
       (subs || []).forEach(s => {
         if (!personMap[s.ratee]) personMap[s.ratee] = { total: 0, count: 0 };
@@ -160,7 +178,6 @@ export default function App() {
         .map(([name, d]) => ({ name, avg: d.count ? d.total / d.count : 0, count: d.count }))
         .sort((a, b) => b.avg - a.avg);
 
-      // Normalized division avg
       const divMap = {};
       (divs || []).forEach(d => {
         Object.entries(d.division_scores).forEach(([div, scores]) => {
@@ -176,13 +193,15 @@ export default function App() {
 
       setLeaderboard({ persons, divisions });
       const months = [...new Set((allSubs || []).map(s => s.month))].sort().reverse();
-      if (months.length) setAllMonths(months);
+      if (months.length) setAllMonths([...new Set([currentMonth, ...months])]);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
 
   const startForm = () => {
-    const assign = generateAssignment(raterName);
+    const monthAssignments = getMonthlyAssignments(currentMonth);
+    const assignNames = monthAssignments[raterName] || [];
+    const assign = assignNames.map(n => TEAM.find(p => p.name === n)).filter(Boolean);
     setAssignment(assign);
     const initP = {};
     assign.forEach(p => { initP[p.name] = Array(PERSONAL_PARAMS.length).fill(0); });
@@ -196,11 +215,10 @@ export default function App() {
   const submitAll = async () => {
     setLoading(true);
     try {
-      const month = getCurrentMonth();
       for (const ratee of assignment) {
         const scoreObj = {};
         (allPersonalScores[ratee.name] || []).forEach((s, i) => { scoreObj[i] = s; });
-        await supabase.from("submissions").insert({ month, rater: raterName, ratee: ratee.name, room: ratee.room, personal_scores: scoreObj });
+        await supabase.from("submissions").insert({ month: currentMonth, rater: raterName, ratee: ratee.name, room: ratee.room, personal_scores: scoreObj });
       }
       const divObj = {};
       Object.entries(divisionScores).forEach(([div, scores]) => {
@@ -208,15 +226,16 @@ export default function App() {
         scores.forEach((s, i) => { scoreObj[i] = s; });
         divObj[div] = scoreObj;
       });
-      await supabase.from("division_scores").insert({ month, rater: raterName, rater_division: raterInfo?.division || "", division_scores: divObj });
+      await supabase.from("division_scores").insert({ month: currentMonth, rater: raterName, rater_division: raterInfo?.division || "", division_scores: divObj });
       setDone(true);
     } catch (e) { alert("Error: " + e.message); }
     setLoading(false);
   };
 
   const resetForm = () => {
-    setStep(0); setRaterName(""); setAssignment([]); setPreviewAssignment([]);
-    setCurrentRateeIdx(0); setCurrentDivIdx(0); setAllPersonalScores({}); setDivisionScores({}); setDone(false);
+    setStep(0); setRaterName(""); setAssignment([]);
+    setCurrentRateeIdx(0); setCurrentDivIdx(0);
+    setAllPersonalScores({}); setDivisionScores({}); setDone(false); setAlreadySubmitted(false);
   };
 
   const currentPersonalScores = currentRatee ? (allPersonalScores[currentRatee.name] || Array(PERSONAL_PARAMS.length).fill(0)) : [];
@@ -234,7 +253,7 @@ export default function App() {
   const NavBtn = ({ v, label }) => (
     <button onClick={() => { setView(v); if (v === "form") resetForm(); }} style={{
       padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer",
-      background: view === v ? T.lavender : "transparent",
+      background: view === v ? T.lavender || "#c4b5fd" : "transparent",
       color: view === v ? "#fff" : T.textMuted,
       boxShadow: view === v ? "0 2px 8px rgba(167,139,250,0.4)" : "none",
     }}>{label}</button>
@@ -256,69 +275,55 @@ export default function App() {
           }}>{s}</button>
         ))}
       </div>
-      {scores[index] > 0 && (
-        <div style={{ fontSize: 11, color: SCORE_COLORS[scores[index]], marginTop: 6, fontWeight: 600 }}>
-          → {SCORE_LABELS[scores[index]]}
-        </div>
-      )}
+      {scores[index] > 0 && <div style={{ fontSize: 11, color: SCORE_COLORS[scores[index]], marginTop: 6, fontWeight: 600 }}>→ {SCORE_LABELS[scores[index]]}</div>}
     </div>
   );
 
-  const RankCard = ({ item, rank }) => {
-    const medalColors = { 1: "#fbbf24", 2: "#9ca3af", 3: "#f97316" };
-    const isTop = rank <= 3;
-    return (
-      <div style={{
-        background: rank === 1 ? "linear-gradient(135deg, #fdf4ff, #f5f3ff)" : T.bgCard,
-        border: `1px solid ${rank === 1 ? "#e9d5ff" : T.borderLight}`,
-        borderRadius: 14, padding: "14px 16px", marginBottom: 8,
-        display: "flex", alignItems: "center", gap: 14,
-        boxShadow: rank === 1 ? "0 4px 20px rgba(167,139,250,0.15)" : "0 1px 4px rgba(0,0,0,0.04)",
-      }}>
-        <div style={{ width: 32, textAlign: "center", fontSize: isTop ? 22 : 13, color: medalColors[rank] || T.textMuted, fontWeight: 700 }}>
-          {rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: T.text }}>{item.name}</div>
-          <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{item.count} penilaian</div>
-          <div style={{ height: 4, background: T.borderLight, borderRadius: 99, marginTop: 8, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${(item.avg / 5) * 100}%`, background: T.gradBtn, borderRadius: 99, transition: "width 0.6s ease" }} />
-          </div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 26, fontWeight: 900, color: T.purple, lineHeight: 1 }}>{item.avg.toFixed(1)}</div>
-          <div style={{ fontSize: 10, color: T.textMuted }}>/5.0</div>
+  const RankCard = ({ item, rank }) => (
+    <div style={{
+      background: rank === 1 ? "linear-gradient(135deg, #fdf4ff, #f5f3ff)" : T.bgCard,
+      border: `1px solid ${rank === 1 ? T.border : T.borderLight}`,
+      borderRadius: 14, padding: "14px 16px", marginBottom: 8,
+      display: "flex", alignItems: "center", gap: 14,
+      boxShadow: rank === 1 ? "0 4px 20px rgba(167,139,250,0.15)" : "0 1px 4px rgba(0,0,0,0.04)",
+    }}>
+      <div style={{ width: 32, textAlign: "center", fontSize: rank <= 3 ? 22 : 13, color: "#c4a8d9", fontWeight: 700 }}>
+        {rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: T.text }}>{item.name}</div>
+        <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{item.count} penilaian masuk</div>
+        <div style={{ height: 4, background: T.borderLight, borderRadius: 99, marginTop: 8, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${(item.avg / 5) * 100}%`, background: T.gradBtn, borderRadius: 99, transition: "width 0.6s ease" }} />
         </div>
       </div>
-    );
-  };
+      <div style={{ textAlign: "right" }}>
+        <div style={{ fontSize: 26, fontWeight: 900, color: T.purple, lineHeight: 1 }}>{item.avg.toFixed(1)}</div>
+        <div style={{ fontSize: 10, color: T.textMuted }}>/5.0</div>
+      </div>
+    </div>
+  );
 
   const PrimaryBtn = ({ onClick, disabled, children }) => (
     <button onClick={onClick} disabled={disabled} style={{
-      width: "100%", padding: "15px", borderRadius: 14, border: "none",
+      flex: 1, width: "100%", padding: "15px", borderRadius: 14, border: "none",
       background: disabled ? T.borderLight : T.gradBtn,
       color: disabled ? T.textMuted : "#fff",
       fontSize: 15, fontWeight: 700, cursor: disabled ? "default" : "pointer",
       boxShadow: disabled ? "none" : "0 4px 16px rgba(167,139,250,0.4)",
-      transition: "all 0.2s",
     }}>{children}</button>
   );
 
-  const GhostBtn = ({ onClick, children }) => (
-    <button onClick={onClick} style={{
-      padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`,
-      background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer",
-    }}>{children}</button>
+  const BackBtn = ({ onClick }) => (
+    <button onClick={onClick} style={{ padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>← Back</button>
   );
 
   return (
-    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'Sora', 'DM Sans', sans-serif", margin: 0 }}>
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'Sora', 'DM Sans', sans-serif" }}>
       {/* Header */}
-      <div style={{ background: "rgba(253,246,255,0.9)", backdropFilter: "blur(20px)", borderBottom: `1px solid ${T.borderLight}`, padding: "14px 20px", position: "sticky", top: 0, zIndex: 100 }}>
+      <div style={{ background: "rgba(253,246,255,0.92)", backdropFilter: "blur(20px)", borderBottom: `1px solid ${T.borderLight}`, padding: "14px 20px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 640, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, background: T.grad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", display: "flex", alignItems: "center", gap: 8 }}>
-            ✦ Assertif Award
-          </div>
+          <div style={{ fontSize: 16, fontWeight: 800, background: T.grad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>✦ Assertif Award</div>
           <div style={{ display: "flex", gap: 4 }}>
             <NavBtn v="home" label="Home" />
             <NavBtn v="form" label="Nilai" />
@@ -332,19 +337,17 @@ export default function App() {
         {/* HOME */}
         {view === "home" && (
           <div>
-            {/* Hero */}
             <div style={{ textAlign: "center", padding: "44px 0 36px" }}>
               <div style={{ width: 80, height: 80, borderRadius: 24, background: T.grad, margin: "0 auto 20px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, boxShadow: "0 8px 32px rgba(196,181,253,0.4)" }}>🏆</div>
               <h1 style={{ fontSize: 30, fontWeight: 900, margin: "0 0 10px", letterSpacing: "-1px", background: T.grad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Assertif Award</h1>
               <p style={{ color: T.textSub, fontSize: 14, margin: "0 0 16px" }}>Penilaian asertivitas bulanan tim</p>
               <span style={{ display: "inline-block", padding: "6px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700, background: T.purpleLight, color: T.purple, border: `1px solid ${T.border}` }}>
-                🗓 {getMonthLabel(getCurrentMonth())}
+                🗓 {getMonthLabel(currentMonth)}
               </span>
             </div>
 
-            {/* Stats */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
-              {[["23", "Anggota", "👥"], ["8", "Divisi", "🏢"], ["30", "Parameter", "⭐"]].map(([n, l, icon]) => (
+              {[["23", "Anggota", "👥"], ["8", "Divisi", "🏢"], ["4", "Dinilai/orang", "⭐"]].map(([n, l, icon]) => (
                 <div key={l} style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: "16px 8px", textAlign: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}>
                   <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
                   <div style={{ fontSize: 22, fontWeight: 900, color: T.purple }}>{n}</div>
@@ -353,14 +356,13 @@ export default function App() {
               ))}
             </div>
 
-            {/* How it works */}
-            <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 16, padding: "20px", marginBottom: 20, boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}>
+            <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 16, padding: "20px", marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 16 }}>Cara Kerja</div>
               {[
-                ["👤", "Pilih namamu", "Sistem assign siapa yang kamu nilai — max 4 orang, adil untuk semua ruangan"],
-                ["⭐", "Nilai 1–5", "Personal: teman seruangan + 2 dari ruangan lain"],
-                ["🏢", "Nilai divisi", "Semua divisi dinilai, kecuali divisimu sendiri"],
-                ["📊", "Lihat ranking", "Leaderboard real-time, dinormalisasi biar fair"],
+                ["🗓️", "Assignment berputar tiap bulan", "Sistem otomatis tentukan siapa yang kamu nilai — 4 orang, beda tiap bulan, semua dapat penilaian yang sama"],
+                ["⭐", "Nilai 1–5 per parameter", "13 parameter personal + 17 parameter divisi"],
+                ["⚖️", "Fair & konsisten", "Semua orang dinilai oleh tepat 4 orang, dinormalisasi di leaderboard"],
+                ["📊", "Ranking real-time", "Lihat leaderboard person & divisi terbaik tiap bulan"],
               ].map(([icon, title, desc]) => (
                 <div key={title} style={{ display: "flex", gap: 14, marginBottom: 16, alignItems: "flex-start" }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: T.purpleLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{icon}</div>
@@ -372,7 +374,9 @@ export default function App() {
               ))}
             </div>
 
-            <PrimaryBtn onClick={() => setView("form")}>Mulai Nilai Sekarang 🌸</PrimaryBtn>
+            <button onClick={() => setView("form")} style={{ width: "100%", padding: "15px", borderRadius: 14, border: "none", background: T.gradBtn, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 16px rgba(167,139,250,0.4)" }}>
+              Mulai Nilai Sekarang 🌸
+            </button>
           </div>
         )}
 
@@ -384,17 +388,17 @@ export default function App() {
                 <div style={{ fontSize: 64, marginBottom: 20 }}>🎉</div>
                 <h2 style={{ fontSize: 26, fontWeight: 900, margin: "0 0 10px", color: T.text }}>Selesai!</h2>
                 <p style={{ color: T.textSub, marginBottom: 6 }}>Kamu menilai <strong style={{ color: T.purple }}>{assignment.length} orang</strong> dan <strong style={{ color: T.purple }}>{divisionList.length} divisi</strong></p>
-                <p style={{ color: T.textMuted, fontSize: 13, marginBottom: 32 }}>Makasih udah berpartisipasi! 🙌</p>
+                <p style={{ color: T.textMuted, fontSize: 13, marginBottom: 32 }}>Sampai bulan depan! 🙌</p>
                 <div style={{ display: "flex", gap: 10 }}>
-                  <GhostBtn onClick={resetForm}>Nilai Lagi</GhostBtn>
-                  <PrimaryBtn onClick={() => setView("leaderboard")}>Lihat Ranking →</PrimaryBtn>
+                  <button onClick={resetForm} style={{ flex: 1, padding: "15px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Kembali</button>
+                  <button onClick={() => setView("leaderboard")} style={{ flex: 1, padding: "15px", borderRadius: 14, border: "none", background: T.gradBtn, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 16px rgba(167,139,250,0.4)" }}>Lihat Ranking →</button>
                 </div>
               </div>
 
             ) : step === 0 ? (
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 900, marginBottom: 6, color: T.text }}>Halo! Siapa kamu? 👋</h2>
-                <p style={{ color: T.textSub, fontSize: 13, marginBottom: 24 }}>Pilih namamu untuk mulai penilaian bulan ini</p>
+                <p style={{ color: T.textSub, fontSize: 13, marginBottom: 24 }}>Pilih namamu untuk lihat assignment bulan {getMonthLabel(currentMonth)}</p>
                 {["Depan 1", "Depan 2", "Belakang 1", "Belakang 2"].map(room => (
                   <div key={room} style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 11, color: T.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 10 }}>Ruangan {room}</div>
@@ -411,19 +415,37 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+
                 {raterName && (
-                  <div style={{ background: "linear-gradient(135deg, #fdf4ff, #f0f4ff)", border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px", marginBottom: 20 }}>
-                    <div style={{ fontSize: 12, color: T.purple, fontWeight: 700, marginBottom: 10 }}>✨ Assignment bulan ini untuk {raterName}:</div>
+                  <div style={{ background: "linear-gradient(135deg, #fdf4ff, #f0f4ff)", border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px", marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, color: T.purple, fontWeight: 700, marginBottom: 10 }}>
+                      ✨ Assignment {getMonthLabel(currentMonth)} untuk {raterName}:
+                    </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                       {previewAssignment.map(p => (
                         <span key={p.name} style={{ fontSize: 12, padding: "4px 12px", background: "#fff", border: `1px solid ${T.borderLight}`, borderRadius: 20, color: T.textSub }}>
-                          {p.name} <span style={{ color: T.textMuted, fontSize: 10 }}>({p.room === raterInfo?.room ? "seruangan" : "ruangan lain"})</span>
+                          {p.name} <span style={{ color: T.textMuted, fontSize: 10 }}>({p.room})</span>
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
-                <PrimaryBtn disabled={!raterName} onClick={startForm}>Lanjut →</PrimaryBtn>
+
+                {alreadySubmitted && raterName && (
+                  <div style={{ background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: "#92400e", fontWeight: 600 }}>
+                    ⚠️ Kamu sudah mengisi penilaian bulan {getMonthLabel(currentMonth)}!
+                  </div>
+                )}
+
+                <button disabled={!raterName || alreadySubmitted} onClick={startForm} style={{
+                  width: "100%", padding: "15px", borderRadius: 14, border: "none",
+                  background: (!raterName || alreadySubmitted) ? T.borderLight : T.gradBtn,
+                  color: (!raterName || alreadySubmitted) ? T.textMuted : "#fff",
+                  fontSize: 15, fontWeight: 700, cursor: (!raterName || alreadySubmitted) ? "default" : "pointer",
+                  boxShadow: (!raterName || alreadySubmitted) ? "none" : "0 4px 16px rgba(167,139,250,0.4)",
+                }}>
+                  {alreadySubmitted ? "Sudah diisi bulan ini ✓" : "Lanjut →"}
+                </button>
               </div>
 
             ) : step === 1 ? (
@@ -435,33 +457,33 @@ export default function App() {
                   <div style={{ height: 6, background: T.borderLight, borderRadius: 99, marginTop: 12, overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${(currentPersonalScores.filter(s => s > 0).length / PERSONAL_PARAMS.length) * 100}%`, background: T.gradBtn, borderRadius: 99, transition: "width 0.2s" }} />
                   </div>
-                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>{currentPersonalScores.filter(s => s > 0).length}/{PERSONAL_PARAMS.length} parameter</div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>{currentPersonalScores.filter(s => s > 0).length}/{PERSONAL_PARAMS.length} parameter dinilai</div>
                 </div>
                 {PERSONAL_PARAMS.map((p, i) => <ScoreRow key={i} label={p} index={i} scores={currentPersonalScores} setScore={setCurrentPersonalScore} />)}
                 <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-                  <button onClick={() => currentRateeIdx > 0 ? setCurrentRateeIdx(currentRateeIdx - 1) : setStep(0)} style={{ padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>← Back</button>
+                  <BackBtn onClick={() => currentRateeIdx > 0 ? setCurrentRateeIdx(currentRateeIdx - 1) : setStep(0)} />
                   <PrimaryBtn disabled={!canNextPersonal} onClick={() => currentRateeIdx < assignment.length - 1 ? setCurrentRateeIdx(currentRateeIdx + 1) : setStep(2)}>
-                    {currentRateeIdx < assignment.length - 1 ? "Orang berikutnya →" : "Lanjut ke Divisi →"}
+                    {currentRateeIdx < assignment.length - 1 ? `Orang ${currentRateeIdx + 2}/${assignment.length} →` : "Lanjut ke Divisi →"}
                   </PrimaryBtn>
                 </div>
               </div>
 
             ) : step === 2 ? (
               <div>
-                <div style={{ background: "linear-gradient(135deg, #f0fdf4, #f0f4ff)", border: `1px solid #bbf7d0`, borderRadius: 14, padding: "16px", marginBottom: 20 }}>
+                <div style={{ background: "linear-gradient(135deg, #f0fdf4, #f0f4ff)", border: "1px solid #bbf7d0", borderRadius: 14, padding: "16px", marginBottom: 20 }}>
                   <div style={{ fontSize: 11, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 4 }}>Penilaian Divisi {currentDivIdx + 1} / {divisionList.length}</div>
                   <div style={{ fontSize: 22, fontWeight: 900, color: T.text }}>Divisi {currentDiv}</div>
                   <div style={{ fontSize: 12, color: T.textSub, marginTop: 2 }}>Nilai perilaku tim secara keseluruhan</div>
                   <div style={{ height: 6, background: T.borderLight, borderRadius: 99, marginTop: 12, overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${(currentDivScores.filter(s => s > 0).length / DIVISION_PARAMS.length) * 100}%`, background: "linear-gradient(90deg, #34d399, #818cf8)", borderRadius: 99, transition: "width 0.2s" }} />
                   </div>
-                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>{currentDivScores.filter(s => s > 0).length}/{DIVISION_PARAMS.length} parameter</div>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>{currentDivScores.filter(s => s > 0).length}/{DIVISION_PARAMS.length} parameter dinilai</div>
                 </div>
                 {DIVISION_PARAMS.map((p, i) => <ScoreRow key={i} label={p} index={i} scores={currentDivScores} setScore={setCurrentDivScore} />)}
                 <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-                  <button onClick={() => currentDivIdx > 0 ? setCurrentDivIdx(currentDivIdx - 1) : setStep(1)} style={{ padding: "15px 18px", borderRadius: 14, border: `1px solid ${T.border}`, background: T.bgCardAlt, color: T.textSub, fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>← Back</button>
+                  <BackBtn onClick={() => currentDivIdx > 0 ? setCurrentDivIdx(currentDivIdx - 1) : setStep(1)} />
                   <PrimaryBtn disabled={!canNextDiv || loading} onClick={() => currentDivIdx < divisionList.length - 1 ? setCurrentDivIdx(currentDivIdx + 1) : submitAll()}>
-                    {loading ? "Menyimpan... 🌸" : currentDivIdx < divisionList.length - 1 ? "Divisi berikutnya →" : "Kirim Semua ✓"}
+                    {loading ? "Menyimpan... 🌸" : currentDivIdx < divisionList.length - 1 ? `Divisi ${currentDivIdx + 2}/${divisionList.length} →` : "Kirim Semua ✓"}
                   </PrimaryBtn>
                 </div>
               </div>
@@ -488,15 +510,13 @@ export default function App() {
                   ? <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: 32, textAlign: "center", color: T.textMuted, marginBottom: 28, fontSize: 13 }}>Belum ada data bulan ini</div>
                   : leaderboard.persons.map((p, i) => <RankCard key={p.name} item={p} rank={i + 1} />)
                 }
-
                 <div style={{ fontSize: 11, fontWeight: 800, color: T.textMuted, textTransform: "uppercase", letterSpacing: 1.5, margin: "28px 0 12px" }}>🏢 Most Assertive Division</div>
                 {leaderboard.divisions.length === 0
                   ? <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: 32, textAlign: "center", color: T.textMuted, fontSize: 13 }}>Belum ada data bulan ini</div>
                   : leaderboard.divisions.map((d, i) => <RankCard key={d.name} item={d} rank={i + 1} />)
                 }
-
                 <div style={{ marginTop: 20, padding: 14, borderRadius: 12, background: T.purpleLight, border: `1px solid ${T.border}`, fontSize: 12, color: T.textSub, textAlign: "center" }}>
-                  ✨ Skor dinormalisasi — fair untuk semua ruangan
+                  ✨ Tiap orang dinilai oleh 4 orang — fair & terkonsisten
                 </div>
               </>
             )}
