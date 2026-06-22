@@ -18,7 +18,7 @@ const TEAM = [
   { name: "Ella", division: "MMBA", room: "Depan 2" },
   { name: "Zia", division: "MMBA", room: "Depan 2" },
   { name: "Dinda", division: "DBE", room: "Depan 2" },
-  { name: "Nasa", division: "SIC", room: "Depan 2" },
+  { name: "Nasa", division: "DBE", room: "Depan 2" },
   { name: "Raja", division: "DBE", room: "Depan 2" },
   { name: "Wesy", division: "DBS", room: "Depan 2" },
   { name: "Zaradiva", division: "Design", room: "Belakang 1" },
@@ -27,7 +27,6 @@ const TEAM = [
   { name: "Nafa", division: "SIC", room: "Belakang 2" },
   { name: "Zara", division: "SIC", room: "Belakang 2" },
   { name: "Tasya", division: "SIC", room: "Belakang 2" },
-  { name: "Na'ilah", division: "DBE", room: "Belakang 2" },
   { name: "Meisya", division: "RA", room: "Belakang 2" },
 ];
 
@@ -103,6 +102,8 @@ function seededRandom(seed) {
 
 // Generate assignment bulanan — konsisten selama sebulan, beda bulan berikutnya
 // Semua dapat tepat 4 penilaian masuk & keluar
+const STORAGE_KEY = "assertif_progress_v1";
+
 function getMonthlyAssignments(yearMonth) {
   const [y, m] = yearMonth.split("-").map(Number);
   const seed = y * 100 + m + 42; // +42 biar Juni 2026 gak terlalu "obvious"
@@ -138,6 +139,45 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [allMonths, setAllMonths] = useState([getCurrentMonth()]);
   const [alreadySubmitted, setAlreadySubmitted] = useState(false);
+  const [statusList, setStatusList] = useState({ submitted: [], notSubmitted: [] });
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Load saved progress on mount (survive refresh)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const data = JSON.parse(saved);
+        if (data.month === getCurrentMonth() && !data.done) {
+          setView(data.view || "home");
+          setStep(data.step || 0);
+          setRaterName(data.raterName || "");
+          setAssignment(data.assignment || []);
+          setCurrentRateeIdx(data.currentRateeIdx || 0);
+          setCurrentDivIdx(data.currentDivIdx || 0);
+          setAllPersonalScores(data.allPersonalScores || {});
+          setDivisionScores(data.divisionScores || {});
+        }
+      }
+    } catch (e) { console.error("Failed to load progress", e); }
+    setHydrated(true);
+  }, []);
+
+  // Save progress whenever it changes (after hydration to avoid overwriting on load)
+  useEffect(() => {
+    if (!hydrated) return;
+    if (step === 0 && !raterName) {
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        month: getCurrentMonth(), view, step, raterName, assignment,
+        currentRateeIdx, currentDivIdx, allPersonalScores, divisionScores, done,
+      }));
+    } catch (e) { console.error("Failed to save progress", e); }
+  }, [hydrated, view, step, raterName, assignment, currentRateeIdx, currentDivIdx, allPersonalScores, divisionScores, done]);
 
   const currentMonth = getCurrentMonth();
   const raterInfo = TEAM.find(p => p.name === raterName);
@@ -151,6 +191,19 @@ export default function App() {
     : [];
 
   useEffect(() => { if (view === "leaderboard") fetchLeaderboard(); }, [view, selectedMonth]);
+  useEffect(() => { if (view === "status") fetchStatus(); }, [view]);
+
+  const fetchStatus = async () => {
+    setStatusLoading(true);
+    try {
+      const { data } = await supabase.from("submissions").select("rater").eq("month", currentMonth);
+      const submittedNames = [...new Set((data || []).map(s => s.rater))];
+      const submitted = TEAM.filter(p => submittedNames.includes(p.name));
+      const notSubmitted = TEAM.filter(p => !submittedNames.includes(p.name));
+      setStatusList({ submitted, notSubmitted });
+    } catch (e) { console.error(e); }
+    setStatusLoading(false);
+  };
 
   // Cek apakah sudah submit bulan ini
   useEffect(() => {
@@ -228,6 +281,7 @@ export default function App() {
       });
       await supabase.from("division_scores").insert({ month: currentMonth, rater: raterName, rater_division: raterInfo?.division || "", division_scores: divObj });
       setDone(true);
+      localStorage.removeItem(STORAGE_KEY);
     } catch (e) { alert("Error: " + e.message); }
     setLoading(false);
   };
@@ -236,6 +290,7 @@ export default function App() {
     setStep(0); setRaterName(""); setAssignment([]);
     setCurrentRateeIdx(0); setCurrentDivIdx(0);
     setAllPersonalScores({}); setDivisionScores({}); setDone(false); setAlreadySubmitted(false);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const currentPersonalScores = currentRatee ? (allPersonalScores[currentRatee.name] || Array(PERSONAL_PARAMS.length).fill(0)) : [];
@@ -266,7 +321,7 @@ export default function App() {
       </div>
       <div style={{ display: "flex", gap: 6 }}>
         {[1,2,3,4,5].map(s => (
-          <button key={s} onClick={() => setScore(index, s)} style={{
+          <button type="button" key={s} onClick={(e) => { e.preventDefault(); e.currentTarget.blur(); setScore(index, s); }} style={{
             flex: 1, padding: "11px 0", borderRadius: 10,
             border: scores[index] === s ? `2px solid ${SCORE_COLORS[s]}` : `1px solid ${T.borderLight}`,
             background: scores[index] === s ? `${SCORE_COLORS[s]}22` : T.bgCardAlt,
@@ -328,6 +383,7 @@ export default function App() {
             <NavBtn v="home" label="Home" />
             <NavBtn v="form" label="Nilai" />
             <NavBtn v="leaderboard" label="Ranking" />
+            <NavBtn v="status" label="Status" />
           </div>
         </div>
       </div>
@@ -517,6 +573,60 @@ export default function App() {
                 }
                 <div style={{ marginTop: 20, padding: 14, borderRadius: 12, background: T.purpleLight, border: `1px solid ${T.border}`, fontSize: 12, color: T.textSub, textAlign: "center" }}>
                   ✨ Tiap orang dinilai oleh 4 orang — fair & terkonsisten
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* STATUS */}
+        {view === "status" && (
+          <div>
+            <h2 style={{ fontSize: 22, fontWeight: 900, margin: "0 0 6px", color: T.text }}>📋 Status Pengisian</h2>
+            <p style={{ color: T.textSub, fontSize: 13, marginBottom: 20 }}>Siapa yang sudah & belum isi bulan {getMonthLabel(currentMonth)}</p>
+
+            {statusLoading ? (
+              <div style={{ textAlign: "center", padding: "60px 0", color: T.textMuted }}>Memuat... 🌸</div>
+            ) : (
+              <>
+                <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 16, padding: "20px", marginBottom: 20 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Progress</span>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: T.purple }}>{statusList.submitted.length}/{TEAM.length}</span>
+                  </div>
+                  <div style={{ height: 10, background: T.borderLight, borderRadius: 99, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${(statusList.submitted.length / TEAM.length) * 100}%`, background: T.gradBtn, borderRadius: 99, transition: "width 0.6s ease" }} />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#34d399", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12 }}>✅ Sudah Isi ({statusList.submitted.length})</div>
+                  {statusList.submitted.length === 0 ? (
+                    <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: 20, textAlign: "center", color: T.textMuted, fontSize: 13 }}>Belum ada yang isi</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {statusList.submitted.map(p => (
+                        <span key={p.name} style={{ fontSize: 12, padding: "6px 14px", background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 20, color: "#047857", fontWeight: 600 }}>
+                          ✓ {p.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#f87171", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12 }}>⏳ Belum Isi ({statusList.notSubmitted.length})</div>
+                  {statusList.notSubmitted.length === 0 ? (
+                    <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 14, padding: 20, textAlign: "center", color: "#047857", fontSize: 13, fontWeight: 700 }}>🎉 Semua sudah isi!</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {statusList.notSubmitted.map(p => (
+                        <span key={p.name} style={{ fontSize: 12, padding: "6px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 20, color: "#b91c1c", fontWeight: 600 }}>
+                          {p.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}
