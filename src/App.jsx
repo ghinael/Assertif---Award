@@ -306,7 +306,7 @@ export default function App() {
   const canNextDiv = currentDivScores.every(s => s > 0);
 
   const NavBtn = ({ v, label }) => (
-    <button onClick={() => { setView(v); if (v === "form") resetForm(); }} style={{
+    <button onClick={() => { setView(v); }} style={{
       padding: "8px 16px", borderRadius: 20, fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer",
       background: view === v ? T.lavender || "#c4b5fd" : "transparent",
       color: view === v ? "#fff" : T.textMuted,
