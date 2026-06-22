@@ -403,7 +403,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
-              {[["23", "Anggota", "👥"], ["8", "Divisi", "🏢"], ["4", "Dinilai/orang", "⭐"]].map(([n, l, icon]) => (
+              {[["22", "Anggota", "👥"], ["8", "Divisi", "🏢"], ["4", "Dinilai/orang", "⭐"]].map(([n, l, icon]) => (
                 <div key={l} style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: "16px 8px", textAlign: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}>
                   <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
                   <div style={{ fontSize: 22, fontWeight: 900, color: T.purple }}>{n}</div>
