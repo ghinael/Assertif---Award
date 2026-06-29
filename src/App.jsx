@@ -273,13 +273,17 @@ export default function App() {
         (allPersonalScores[ratee.name] || []).forEach((s, i) => { scoreObj[i] = s; });
         await supabase.from("submissions").insert({ month: currentMonth, rater: raterName, ratee: ratee.name, room: ratee.room, personal_scores: scoreObj });
       }
-      const divObj = {};
-      Object.entries(divisionScores).forEach(([div, scores]) => {
-        const scoreObj = {};
-        scores.forEach((s, i) => { scoreObj[i] = s; });
-        divObj[div] = scoreObj;
-      });
-      await supabase.from("division_scores").insert({ month: currentMonth, rater: raterName, rater_division: raterInfo?.division || "", division_scores: divObj });
+      // Cek dulu apakah division_scores sudah ada untuk rater ini bulan ini (cegah dobel insert)
+      const { data: existingDiv } = await supabase.from("division_scores").select("id").eq("month", currentMonth).eq("rater", raterName).limit(1);
+      if (!existingDiv || existingDiv.length === 0) {
+        const divObj = {};
+        Object.entries(divisionScores).forEach(([div, scores]) => {
+          const scoreObj = {};
+          scores.forEach((s, i) => { scoreObj[i] = s; });
+          divObj[div] = scoreObj;
+        });
+        await supabase.from("division_scores").insert({ month: currentMonth, rater: raterName, rater_division: raterInfo?.division || "", division_scores: divObj });
+      }
       setDone(true);
       localStorage.removeItem(STORAGE_KEY);
     } catch (e) { alert("Error: " + e.message); }
@@ -403,7 +407,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
-              {[["22", "Anggota", "👥"], ["8", "Divisi", "🏢"], ["4", "Dinilai/orang", "⭐"]].map(([n, l, icon]) => (
+              {[[String(TEAM.length), "Anggota", "👥"], ["8", "Divisi", "🏢"], ["4", "Dinilai/orang", "⭐"]].map(([n, l, icon]) => (
                 <div key={l} style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 14, padding: "16px 8px", textAlign: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}>
                   <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
                   <div style={{ fontSize: 22, fontWeight: 900, color: T.purple }}>{n}</div>
