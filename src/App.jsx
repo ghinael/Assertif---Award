@@ -139,6 +139,7 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [allMonths, setAllMonths] = useState([getCurrentMonth()]);
   const [alreadySubmitted, setAlreadySubmitted] = useState(false);
+  const [divisionAlreadyDone, setDivisionAlreadyDone] = useState(false);
   const [statusList, setStatusList] = useState({ submitted: [], notSubmitted: [] });
   const [statusLoading, setStatusLoading] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -210,6 +211,8 @@ export default function App() {
     if (raterName) {
       supabase.from("submissions").select("id").eq("month", currentMonth).eq("rater", raterName).limit(1)
         .then(({ data }) => setAlreadySubmitted(data && data.length > 0));
+      supabase.from("division_scores").select("id").eq("month", currentMonth).eq("rater", raterName).limit(1)
+        .then(({ data }) => setDivisionAlreadyDone(data && data.length > 0));
     }
   }, [raterName]);
 
@@ -294,6 +297,7 @@ export default function App() {
     setStep(0); setRaterName(""); setAssignment([]);
     setCurrentRateeIdx(0); setCurrentDivIdx(0);
     setAllPersonalScores({}); setDivisionScores({}); setDone(false); setAlreadySubmitted(false);
+    setDivisionAlreadyDone(false);
     localStorage.removeItem(STORAGE_KEY);
   };
 
@@ -522,8 +526,11 @@ export default function App() {
                 {PERSONAL_PARAMS.map((p, i) => <ScoreRow key={i} label={p} index={i} scores={currentPersonalScores} setScore={setCurrentPersonalScore} />)}
                 <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
                   <BackBtn onClick={() => currentRateeIdx > 0 ? setCurrentRateeIdx(currentRateeIdx - 1) : setStep(0)} />
-                  <PrimaryBtn disabled={!canNextPersonal} onClick={() => currentRateeIdx < assignment.length - 1 ? setCurrentRateeIdx(currentRateeIdx + 1) : setStep(2)}>
-                    {currentRateeIdx < assignment.length - 1 ? `Orang ${currentRateeIdx + 2}/${assignment.length} →` : "Lanjut ke Divisi →"}
+                  <PrimaryBtn disabled={!canNextPersonal || loading} onClick={() => {
+                    if (currentRateeIdx < assignment.length - 1) { setCurrentRateeIdx(currentRateeIdx + 1); return; }
+                    if (divisionAlreadyDone) { submitAll(); } else { setStep(2); }
+                  }}>
+                    {loading ? "Menyimpan... 🌸" : currentRateeIdx < assignment.length - 1 ? `Orang ${currentRateeIdx + 2}/${assignment.length} →` : (divisionAlreadyDone ? "Kirim ✓ (Divisi sudah tersimpan)" : "Lanjut ke Divisi →")}
                   </PrimaryBtn>
                 </div>
               </div>
